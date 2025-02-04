@@ -19,7 +19,7 @@ driver = HX711(d_out = hx711_digitalout, pd_sck = hx711_powerdown_sck, channel =
 monitor_led = Pin(13, mode=Pin.OUT)
 
 '''Defining Test Duration, Sampling Rate and Calibration'''
-test_time = 10						# Units in [seconds]
+test_time = 45						# Units in [seconds]
 test_time_ms = test_time * 1000
 sampling_rate = 100					# Units in [ms]
 
@@ -45,7 +45,7 @@ def loadcell_reading(Timer):
     global i
     force = read_force()            # Read the calibrated weight/force
     force_values[i] = force
-    print(f"Force: {force} kg-f")   # kg-f is the same as a Newton
+    print(f"Force: {force} Newtons")   # Units: Newton
     monitor_led(0)
     i = i + 1
 
