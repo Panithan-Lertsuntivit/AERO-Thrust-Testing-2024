@@ -1,4 +1,4 @@
-# ESP32-thrust-testing
+# AERO SAE Thrust Testing 2024-2025
 Propeller and motor thrust testing using the ESP32 (micropython)
 
 Equipment:
