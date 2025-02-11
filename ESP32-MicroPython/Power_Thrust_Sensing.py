@@ -5,6 +5,20 @@ from hx711 import HX711  			# Loadcell ADC library
 from ina228 import INA228  			# Power Monitor ADC library
 import uos							# Library for file system interaction
 
+import network
+import espnow						# For streaming values to receiver
+
+
+''' - - - - - Initializing ESP-NOW  - - - - - '''
+# A WLAN interface must be active to send()/recv()
+sta = network.WLAN(network.WLAN.IF_STA)  # Or network.WLAN.IF_AP
+sta.active(True)
+
+e = espnow.ESPNow()
+e.active(True)
+receiver_esp = b'\x14\x2b\x2f\xaf\x58\x58'   	# MAC address of peer's wifi interface
+e.add_peer(receiver_esp)      					# Must add_peer() before send()
+
 monitor_led = Pin(13, mode=Pin.OUT)
 
 ''' - - - - - Load Cell Setup - - - - - '''
@@ -18,10 +32,11 @@ hx711_digitalout = 27
 hx711_powerdown_sck = 12
 
 # Initialize HX711 and Calibration Settings
-loadcell_driver = HX711(d_out=hx711_digitalout, pd_sck=hx711_powerdown_sck, channel=CHANNEL_A_64)
+loadcell_driver = HX711(d_out=hx711_digitalout, pd_sck=hx711_powerdown_sck,
+                        channel=CHANNEL_A_64)
 
-calibration_factor = 0.000458  # Calibrate this!
-calibration_offset = -6       # Calibrate this!
+calibration_factor = 0.000458  
+calibration_offset = -6       
 
 ''' - - - - - INA228 Setup - - - - - '''
 # MATEK INA Properties
@@ -68,6 +83,7 @@ def read_load_cell(timer):
             # Stopping the timers
             load_cell_timer.deinit()
             power_monitor_timer.deinit()
+            espnow_timer.deinit()
             
             print("Timers deinitialized. Data collection complete.")        
         
@@ -87,13 +103,31 @@ def read_power_monitor(timer):
         current_values[data_index] = current
         power_values[data_index] = power
         
+# ESPNOW Timer Callback
+def espnow_transmit(timer):
+    # Creating string message
+    if data_index < max_data_points:
+        force = force_values[data_index - 1]
+        voltage = voltage_values[data_index - 1]
+        current = current_values[data_index - 1]
+        power = power_values[data_index - 1]
+        
+        message = (f"{force:7.2f} N, {voltage:7.2f} V, "
+                   f"{current:7.2f} A, {power:7.2f} W")
+    else:
+        message = f"Finished Data Collection"
+        
+    # Transmitting message
+    e.send(receiver_esp, message)
+        
 
 # --- Timer Setup ---
 power_monitor_timer = Timer(0)
 load_cell_timer = Timer(1)
 
-sampling_rate = 100  # ms
+espnow_timer = Timer(2)
 
+sampling_rate = 50  # ms
 
 ''' - - - - - Main Logic - - - - - '''
 # Asking user how long they plan on recording sensor data; then calculate the max number of data points
@@ -108,9 +142,13 @@ current_values = [0.0] * max_data_points
 power_values = [0.0] * max_data_points
 timestamps = [0.0] * max_data_points
 
-# Timers for the Power Monitor and Loadcell
+# Timers for the Power Monitor, Loadcell, and ESPNOW
+e.send(receiver_esp, "Starting . . . ")
+
 power_monitor_timer.init(period=sampling_rate, mode=Timer.PERIODIC, callback=read_power_monitor)
 load_cell_timer.init(period=sampling_rate, mode=Timer.PERIODIC, callback=read_load_cell)
+espnow_timer.init(period=sampling_rate, mode=Timer.PERIODIC, callback=espnow_transmit)
+
 
 # Keeping the main thread alive and still active /
 # not busy constanty checking data_index [which would strain CPU]
@@ -135,3 +173,5 @@ except OSError as e:
 
 load_cell_timer.deinit()  # Ensure timers are stopped in finally block
 power_monitor_timer.deinit()
+espnow_timer.deinit()
+
