@@ -26,8 +26,11 @@ class INA228:
         self.power_LSB = None    # Will be calculated during initialization
 
     def _write_register(self, register, value):
-        self.i2c.writeto_mem(self.address, register, value.to_bytes(2, 'big'),
-                             addrsize=8)
+        # Portable way to write 16-bit values to I2C registers
+        byte1 = (value >> 8) & 0xFF  # Extract high byte
+        byte2 = value & 0xFF       # Extract low byte
+        self.i2c.writeto_mem(self.address, register, bytes([byte1]), addrsize=8)
+        self.i2c.writeto_mem(self.address, register + 1, bytes([byte2]), addrsize=8) 
 
     def _read_register(self, register):
         return int.from_bytes(self.i2c.readfrom_mem(self.address, register, 2,
