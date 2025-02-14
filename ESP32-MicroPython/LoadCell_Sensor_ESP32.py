@@ -1,70 +1,104 @@
 ''' Script is called LoadCell_Sensor_ESP32.py '''
-import machine
 import time
-from machine import Pin, Timer
-from hx711 import HX711
-import uos				# For saving data points to csv file
+from machine import Pin, Timer, I2C, ADC
+from hx711 import HX711  			# Loadcell ADC library
+from ina228 import INA228  			# Power Monitor ADC library
+import uos							# Library for file system interaction
 
-'''Variables for the HX711 Amplifier'''
+''' - - - - - Load Cell Setup - - - - - '''
+# Variables for the HX711 Amplifier
 CHANNEL_A_128 = const(1)
 CHANNEL_A_64 = const(3)
 CHANNEL_B_32 = const(2)
 
-'''HX 711 Pinouts'''
+# I/O Pins
 hx711_digitalout = 27
 hx711_powerdown_sck = 12
 
-# Initialize HX711 and LED
-driver = HX711(d_out=hx711_digitalout, pd_sck=hx711_powerdown_sck,
-               channel=CHANNEL_A_64)
+# Initialize HX711 and Calibration Settings
+loadcell_driver = HX711(d_out=hx711_digitalout, pd_sck=hx711_powerdown_sck,
+                        channel=CHANNEL_A_64)
 
-monitor_led = Pin(13, mode=Pin.OUT)
-
-'''Defining Test Duration, Sampling Rate and Calibration'''
-test_time = 45						# Units in [seconds]
-test_time_ms = test_time * 1000
-sampling_rate = 100					# Units in [ms]
-
-num_data_points = int(test_time_ms / sampling_rate) + 2
-
-# Calibration Factor will be multiplied, Offset is added
 calibration_factor = 0.000458
 calibration_offset = -6
 
-force_values = [0] * num_data_points
+monitor_led = Pin(13, mode=Pin.OUT)
 
-i = 0
+''' - - - - - Pre-allocated Arrays - - - - - '''
+max_data_points = 1500			# Set an initial amount of data points
+force_values = [0.0] * max_data_points
+timestamps = [0.0] * max_data_points
 
-# Function to read force/weight and apply the calibration factor
-def read_force():
-    monitor_led(1)
-    raw_value = driver.read(raw=True)
-    force_calibrated = (raw_value * calibration_factor) + calibration_offset
-    return force_calibrated
+data_index = 0
+time_ms = 0
 
-# Function to be called periodically by a timer
-def loadcell_reading(Timer):
-    global i
-    force = read_force()            # Read the calibrated weight/force
-    force_values[i] = force
-    print(f"Force: {force} Newtons")   # Units: Newton
-    monitor_led(0)
-    i = i + 1
+''' - - - - - Timer Callbacks - - - - - '''
+# Loadcell Timer Callback
+def read_load_cell(timer):
+    global data_index, max_data_points, time_ms, sampling_rate
 
-# Timer setup
-loadcell_timer = Timer(1)
+    raw_force = loadcell_driver.read(raw=True)
+    calibrated_force = (raw_force * calibration_factor) + calibration_offset
 
-# Period is in units of [ms]
-loadcell_timer.init(period=sampling_rate, mode=loadcell_timer.PERIODIC,
-                    callback=loadcell_reading)
+    time_ms = time_ms + sampling_rate
 
-time.sleep(test_time)
-loadcell_timer.deinit()
+    # Check if within range of storing values
+    if data_index < max_data_points:
+        # Saving force value and timestamp; then increment
+        force_values[data_index] = calibrated_force
+        timestamps[data_index] = time_ms / 1000
 
-print('All timers and PWM deinitialized.')
+        print(calibrated_force)
 
-# Opening a file in write mode
-with open('Thrust_values.csv', 'w') as file:
-    for value in force_values:
-        file.write(f"{value} \n")
-        
+        data_index = data_index + 1
+
+        # Stop logging when reached the end
+        if data_index >= max_data_points:
+            # Stopping the timers
+            load_cell_timer.deinit()
+            print("Timers deinitialized. Data collection complete.")
+
+# --- Timer Setup ---
+load_cell_timer = Timer(1)
+
+sampling_rate = 50  # ms
+
+''' - - - - - Main Logic - - - - - '''
+# Asking user how long they plan on recording sensor data; then calculate the max number of data points
+recording_duration = int(input("Enter recording duration (seconds): "))
+print(f"Sensor recording will occur for {recording_duration} seconds")
+max_data_points = int((recording_duration * 1000) / sampling_rate)
+
+# Proper Pre-Allocation of Lists/Arrays
+force_values = [0.0] * max_data_points
+timestamps = [0.0] * max_data_points
+
+# Timers for the Loadcell
+load_cell_timer.init(period=sampling_rate, mode=Timer.PERIODIC, callback=read_load_cell)
+
+# Keeping the main thread alive and still active /
+# not busy constanty checking data_index [which would strain CPU]
+while data_index < max_data_points:
+    # Sleep for 100 milli-seconds to avoid busy waiting
+    time.sleep_ms(25)
+
+# Asking user for the file name to save to
+name_of_file = input("Enter filename to save (e.g., thrust_data): ")
+filename = f"{name_of_file}.csv"
+
+# --- Save Data ---
+try:
+    with open(filename, 'w') as file:
+        file.write("Timestamp (ms),Force (N)\n")
+        for i in range(data_index): # only write the data that was collected
+            file.write("{},{} \n".format(timestamps[i], force_values[i]))
+    print("Data saved to {}".format(filename))
+except OSError as e:
+    print("Error saving data:", e)
+    with open('Thrust_data.csv', 'w') as file:
+        file.write("Timestamp (ms),Force (N)\n")
+        for i in range(data_index):
+            file.write("{},{} \n".format(timestamps[i]))
+    print("Data saved to backup file Thrust_data.csv")
+
+load_cell_timer.deinit()  # Ensure timers are stopped in finally block
